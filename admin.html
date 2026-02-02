@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <?!= include('shared-css'); ?>
+  <? var _url = (typeof appUrl !== 'undefined' && appUrl) ? appUrl : ''; ?>
+  <script>var APP_BASE_URL = '<?!= _url ?>';</script>
+  <? var _tok = (typeof sessionToken !== 'undefined' && sessionToken) ? sessionToken : ''; ?>
+  <script>window.__CMS_TOKEN__ = '<?!= _tok ?>';</script>
+</head>
+<body>
+  <!-- Visible if scripts fail or page is blank (remove after debugging) -->
+  <noscript><p style="padding:1rem;background:#fff3cd;">JavaScript is disabled. Enable it to use the app.</p></noscript>
+  <div id="adminRoot" class="no-print">
+    <h1>Clinic Management System – Admin</h1>
+    <p>Welcome, <span id="userName"></span>. <a href="#" id="logoutLink">Sign out</a></p>
+    <div class="nav">
+      <a href="#" id="navDashboard">Dashboard</a>
+      <a href="#" id="navUsers">Users</a>
+      <a href="#" id="navAvailability">Doctor hours</a>
+      <a href="#" id="navAppointments">Appointments</a>
+      <a href="#" id="navExpenses">Expenses</a>
+      <a href="#" id="navSalaries">Salaries</a>
+    </div>
+  </div>
+
+  <div id="panelDashboard" class="panel">
+    <h2>Dashboard</h2>
+    <div class="card">
+      <p><strong>Today's income:</strong> <span id="incomeToday"></span></p>
+      <p><strong>This month – Expenses:</strong> <span id="monthExpenses"></span></p>
+      <p><strong>This month – Salaries:</strong> <span id="monthSalaries"></span></p>
+    </div>
+    <h3>Recent expenses</h3>
+    <div id="recentExpenses"></div>
+    <h3>Recent salaries</h3>
+    <div id="recentSalaries"></div>
+  </div>
+
+  <div id="panelUsers" class="panel" style="display:none;">
+    <h2>Users</h2>
+    <div class="card">
+      <label>Role</label>
+      <select id="userRole"><option value="Doctor">Doctor</option><option value="Patient">Patient</option><option value="Admin">Admin</option></select>
+      <label>Email</label>
+      <input type="text" id="userEmail" placeholder="Email">
+      <label>Phone</label>
+      <input type="text" id="userPhone" placeholder="Phone">
+      <label>Password</label>
+      <input type="password" id="userPassword" placeholder="Password">
+      <label>Name</label>
+      <input type="text" id="userNameInput" placeholder="Name">
+      <button type="button" id="addUserBtn">Add user</button>
+      <div id="userMsg" class="error"></div>
+    </div>
+  </div>
+
+  <div id="panelAvailability" class="panel" style="display:none;">
+    <h2>Doctor visiting hours</h2>
+    <p>Set start and end time per day (0=Sun, 6=Sat). Slots are 15 minutes.</p>
+    <div class="card">
+      <label>Doctor</label>
+      <select id="availDoctor"></select>
+      <label>Day (0=Sun … 6=Sat)</label>
+      <input type="number" id="availDay" min="0" max="6" value="1">
+      <label>Start time (e.g. 09:00)</label>
+      <input type="text" id="availStart" placeholder="09:00" value="09:00">
+      <label>End time (e.g. 17:00)</label>
+      <input type="text" id="availEnd" placeholder="17:00" value="17:00">
+      <button type="button" id="saveAvailBtn">Save</button>
+      <div id="availMsg" class="error"></div>
+    </div>
+  </div>
+
+  <div id="panelAppointments" class="panel" style="display:none;">
+    <h2>All appointments</h2>
+    <div id="adminAppointments"></div>
+  </div>
+
+  <div id="panelExpenses" class="panel" style="display:none;">
+    <h2>Expenses</h2>
+    <div class="card">
+      <label>Description</label>
+      <input type="text" id="expDesc" placeholder="Description">
+      <label>Amount</label>
+      <input type="number" id="expAmount" step="0.01" placeholder="Amount">
+      <label>Date</label>
+      <input type="date" id="expDate">
+      <button type="button" id="addExpenseBtn">Add expense</button>
+      <div id="expMsg" class="error"></div>
+    </div>
+    <h3>Recent expenses</h3>
+    <div id="expensesList"></div>
+  </div>
+
+  <div id="panelSalaries" class="panel" style="display:none;">
+    <h2>Salaries</h2>
+    <div class="card">
+      <label>User (Doctor/Nurse)</label>
+      <select id="salaryUser"></select>
+      <label>Month</label>
+      <input type="number" id="salaryMonth" min="1" max="12">
+      <label>Year</label>
+      <input type="number" id="salaryYear">
+      <label>Amount</label>
+      <input type="number" id="salaryAmount" step="0.01">
+      <label>Type</label>
+      <select id="salaryType"><option value="Nurse">Nurse (fixed)</option><option value="Doctor">Doctor (consultation)</option></select>
+      <button type="button" id="addSalaryBtn">Add salary</button>
+      <div id="salaryMsg" class="error"></div>
+    </div>
+    <div id="salariesList"></div>
+  </div>
+
+  <?!= include('shared-js'); ?>
+  <script>
+    (function() {
+      // If google.script.run or getSessionToken not ready, show nothing and avoid blank redirect
+      if (typeof getSessionToken !== 'function') {
+        document.body.innerHTML = '<p style="padding:20px;">Script not loaded. Check that shared-js is included and file names are shared-js (lowercase).</p>';
+        return;
+      }
+      var token = getSessionToken();
+      if (!token) {
+        window.location.href = window.location.pathname;
+        return;
+      }
+
+      function run(fn) {
+        var args = [token].concat(Array.prototype.slice.call(arguments, 1));
+        return new Promise(function(resolve, reject) {
+          google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[fn].apply(google.script.run, args);
+        });
+      }
+
+      document.getElementById('logoutLink').onclick = function(e) { e.preventDefault(); doLogout(); };
+
+      function showPanel(id) {
+        document.querySelectorAll('.panel').forEach(function(p) { p.style.display = 'none'; });
+        var el = document.getElementById(id);
+        if (el) el.style.display = 'block';
+      }
+
+      document.getElementById('navDashboard').onclick = function(e) { e.preventDefault(); showPanel('panelDashboard'); loadDashboard(); };
+      document.getElementById('navUsers').onclick = function(e) { e.preventDefault(); showPanel('panelUsers'); loadDoctorsForSelect(); };
+      document.getElementById('navAvailability').onclick = function(e) { e.preventDefault(); showPanel('panelAvailability'); loadDoctorsForAvail(); };
+      document.getElementById('navAppointments').onclick = function(e) { e.preventDefault(); showPanel('panelAppointments'); loadAppointments(); };
+      document.getElementById('navExpenses').onclick = function(e) { e.preventDefault(); showPanel('panelExpenses'); loadExpenses(); };
+      document.getElementById('navSalaries').onclick = function(e) { e.preventDefault(); showPanel('panelSalaries'); loadSalariesPanel(); };
+
+      function loadDashboard() {
+        run('getAdminDashboard').then(function(r) {
+          if (r.error) { document.getElementById('incomeToday').textContent = r.error; return; }
+          document.getElementById('incomeToday').textContent = r.incomeToday;
+          document.getElementById('monthExpenses').textContent = r.monthExpenses;
+          document.getElementById('monthSalaries').textContent = r.monthSalaries;
+          var exp = document.getElementById('recentExpenses');
+          exp.innerHTML = r.recentExpenses && r.recentExpenses.length ? '<table><tr><th>Date</th><th>Description</th><th>Amount</th></tr>' + r.recentExpenses.map(function(x) { return '<tr><td>' + x.date + '</td><td>' + (x.description || '') + '</td><td>' + x.amount + '</td></tr>'; }).join('') + '</table>' : '<p>None</p>';
+          var sal = document.getElementById('recentSalaries');
+          sal.innerHTML = r.recentSalaries && r.recentSalaries.length ? '<table><tr><th>Name</th><th>Month</th><th>Year</th><th>Amount</th><th>Type</th></tr>' + r.recentSalaries.map(function(x) { return '<tr><td>' + (x.name || '') + '</td><td>' + x.month + '</td><td>' + x.year + '</td><td>' + x.amount + '</td><td>' + (x.type || '') + '</td></tr>'; }).join('') + '</table>' : '<p>None</p>';
+        }).catch(function(err) { document.getElementById('incomeToday').textContent = err.message || 'Error'; });
+      }
+
+      google.script.run.withSuccessHandler(function(r) {
+        if (r.error) return;
+        document.getElementById('userName').textContent = r.name || 'Admin';
+      }).withFailureHandler(function() {}).getSessionFromToken(token);
+
+      function loadDoctorsForSelect() {
+        run('getUsers').then(function(r) {
+          if (r.error) return;
+          var sel = document.getElementById('salaryUser');
+          sel.innerHTML = '<option value="">Select user</option>';
+          (r.users || []).forEach(function(u) {
+            var o = document.createElement('option');
+            o.value = u.userId;
+            o.textContent = (u.name || u.email || u.userId) + ' (' + (u.role || '') + ')';
+            sel.appendChild(o);
+          });
+        });
+      }
+
+      function loadDoctorsForAvail() {
+        run('getDoctorsList').then(function(r) {
+          if (r.error) return;
+          var sel = document.getElementById('availDoctor');
+          sel.innerHTML = '<option value="">Select doctor</option>';
+          (r.doctors || []).forEach(function(d) {
+            var o = document.createElement('option');
+            o.value = d.userId;
+            o.textContent = d.name || d.userId;
+            sel.appendChild(o);
+          });
+        });
+      }
+
+      document.getElementById('addUserBtn').onclick = function() {
+        var role = document.getElementById('userRole').value;
+        var email = document.getElementById('userEmail').value.trim();
+        var phone = document.getElementById('userPhone').value.trim();
+        var pw = document.getElementById('userPassword').value;
+        var name = document.getElementById('userNameInput').value.trim();
+        var msg = document.getElementById('userMsg');
+        msg.textContent = '';
+        if (!email) { msg.textContent = 'Email required.'; return; }
+        google.script.run.withSuccessHandler(function(res) {
+          if (res.error) { msg.textContent = res.error; return; }
+          msg.textContent = 'User added.';
+          msg.className = 'success';
+          document.getElementById('userEmail').value = '';
+          document.getElementById('userPhone').value = '';
+          document.getElementById('userPassword').value = '';
+          document.getElementById('userNameInput').value = '';
+        }).withFailureHandler(function(err) { msg.textContent = err.message || 'Error'; msg.className = 'error'; }).addUser(token, role, email, phone, pw, name);
+      };
+
+      document.getElementById('saveAvailBtn').onclick = function() {
+        var docId = document.getElementById('availDoctor').value;
+        var day = document.getElementById('availDay').value;
+        var start = document.getElementById('availStart').value || '09:00';
+        var end = document.getElementById('availEnd').value || '17:00';
+        var msg = document.getElementById('availMsg');
+        msg.textContent = '';
+        if (!docId) { msg.textContent = 'Select doctor.'; return; }
+        run('saveDoctorAvailability', { doctorUserId: docId, dayOfWeek: day, startTime: start, endTime: end }).then(function(res) {
+          if (res.error) { msg.textContent = res.error; return; }
+          msg.textContent = 'Saved.';
+          msg.className = 'success';
+        }).catch(function(err) { msg.textContent = err.message || 'Error'; });
+      };
+
+      function loadAppointments() {
+        var from = new Date(new Date().setDate(1)).toISOString().split('T')[0];
+        var to = new Date().toISOString().split('T')[0];
+        run('getMyAppointments', from, to).then(function(r) {
+          var el = document.getElementById('adminAppointments');
+          if (r.error) { el.innerHTML = '<p class="error">' + r.error + '</p>'; return; }
+          var list = r.appointments || [];
+          el.innerHTML = list.length ? '<table><tr><th>Date/Time</th><th>Patient</th><th>Doctor</th><th>Status</th></tr>' + list.map(function(a) { return '<tr><td>' + (a.slotStart || '') + '</td><td>' + (a.patientName || '') + '</td><td>' + (a.doctorName || '') + '</td><td>' + (a.status || '') + '</td></tr>'; }).join('') + '</table>' : '<p>No appointments.</p>';
+        }).catch(function(err) { document.getElementById('adminAppointments').innerHTML = '<p class="error">' + (err.message || 'Error') + '</p>'; });
+      }
+
+      document.getElementById('addExpenseBtn').onclick = function() {
+        var desc = document.getElementById('expDesc').value;
+        var amt = document.getElementById('expAmount').value;
+        var date = document.getElementById('expDate').value;
+        var msg = document.getElementById('expMsg');
+        msg.textContent = '';
+        google.script.run.withSuccessHandler(function(res) {
+          if (res.error) { msg.textContent = res.error; return; }
+          msg.textContent = 'Expense added.';
+          msg.className = 'success';
+          document.getElementById('expDesc').value = '';
+          document.getElementById('expAmount').value = '';
+          loadExpenses();
+        }).withFailureHandler(function(err) { msg.textContent = err.message || 'Error'; }).addExpense(token, desc, amt, date || undefined);
+      };
+
+      function loadExpenses() {
+        var now = new Date();
+        var start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+        var end = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+        run('getExpenses', start, end).then(function(r) {
+          var el = document.getElementById('expensesList');
+          if (r.error) { el.innerHTML = '<p class="error">' + r.error + '</p>'; return; }
+          var list = r.expenses || [];
+          el.innerHTML = list.length ? '<table><tr><th>Date</th><th>Description</th><th>Amount</th></tr>' + list.map(function(x) { return '<tr><td>' + x.date + '</td><td>' + (x.description || '') + '</td><td>' + x.amount + '</td></tr>'; }).join('') + '</table>' : '<p>None</p>';
+        });
+      }
+
+      function loadSalariesPanel() {
+        loadDoctorsForSelect();
+        var m = new Date().getMonth() + 1;
+        var y = new Date().getFullYear();
+        document.getElementById('salaryMonth').value = m;
+        document.getElementById('salaryYear').value = y;
+        run('getSalaries', m, y, null).then(function(r) {
+          var el = document.getElementById('salariesList');
+          if (r.error) { el.innerHTML = '<p class="error">' + r.error + '</p>'; return; }
+          var list = r.salaries || [];
+          el.innerHTML = list.length ? '<table><tr><th>Name</th><th>Month</th><th>Year</th><th>Amount</th><th>Type</th></tr>' + list.map(function(x) { return '<tr><td>' + (x.name || '') + '</td><td>' + x.month + '</td><td>' + x.year + '</td><td>' + x.amount + '</td><td>' + (x.type || '') + '</td></tr>'; }).join('') + '</table>' : '<p>None</p>';
+        });
+      }
+
+      document.getElementById('addSalaryBtn').onclick = function() {
+        var userId = document.getElementById('salaryUser').value;
+        var month = document.getElementById('salaryMonth').value;
+        var year = document.getElementById('salaryYear').value;
+        var amount = document.getElementById('salaryAmount').value;
+        var type = document.getElementById('salaryType').value;
+        var msg = document.getElementById('salaryMsg');
+        msg.textContent = '';
+        if (!userId) { msg.textContent = 'Select user.'; return; }
+        google.script.run.withSuccessHandler(function(res) {
+          if (res.error) { msg.textContent = res.error; return; }
+          msg.textContent = 'Salary added.';
+          msg.className = 'success';
+          document.getElementById('salaryAmount').value = '';
+          loadSalariesPanel();
+        }).withFailureHandler(function(err) { msg.textContent = err.message || 'Error'; }).addSalary(token, userId, month, year, amount, type);
+      };
+
+      var d = new Date();
+      document.getElementById('expDate').value = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      loadDashboard();
+    })();
+  </script>
+</body>
+</html>

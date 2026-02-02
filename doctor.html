@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <?!= include('shared-css'); ?>
+  <? var _url = (typeof appUrl !== 'undefined' && appUrl) ? appUrl : ''; ?>
+  <script>var APP_BASE_URL = '<?!= _url ?>';</script>
+  <? var _tok = (typeof sessionToken !== 'undefined' && sessionToken) ? sessionToken : ''; ?>
+  <script>window.__CMS_TOKEN__ = '<?!= _tok ?>';</script>
+</head>
+<body>
+  <div class="no-print">
+    <h1>Clinic Management System – Doctor</h1>
+    <p>Welcome, <span id="userName"></span>. <a href="#" id="logoutLink">Sign out</a></p>
+    <div class="nav">
+      <a href="#" id="navToday">Today's appointments</a>
+      <a href="#" id="navPrescription">Write prescription</a>
+      <a href="#" id="navBilling">Create bill</a>
+      <a href="#" id="navAvailability">My hours</a>
+      <a href="#" id="navEarnings">My earnings</a>
+    </div>
+  </div>
+
+  <div id="panelToday" class="panel">
+    <h2>Today's appointments</h2>
+    <div id="todayList"></div>
+  </div>
+
+  <div id="panelPrescription" class="panel" style="display:none;">
+    <h2>Write prescription</h2>
+    <div class="card">
+      <label>Appointment</label>
+      <select id="prescAppointment"></select>
+      <label>Prescription content</label>
+      <textarea id="prescContent" rows="8" placeholder="Medicines, dosage, instructions..."></textarea>
+      <button type="button" id="savePrescBtn">Save prescription</button>
+      <div id="prescMsg" class="error"></div>
+    </div>
+  </div>
+
+  <div id="panelBilling" class="panel" style="display:none;">
+    <h2>Create bill</h2>
+    <div class="card">
+      <label>Appointment</label>
+      <select id="billAppointment"></select>
+      <label>Amount (consultation fee)</label>
+      <input type="number" id="billAmount" step="0.01" placeholder="Amount">
+      <button type="button" id="createBillBtn">Create bill</button>
+      <div id="billMsg" class="error"></div>
+    </div>
+  </div>
+
+  <div id="panelAvailability" class="panel" style="display:none;">
+    <h2>My visiting hours</h2>
+    <p>Set start and end time per day (0=Sun … 6=Sat). Slots are 15 minutes.</p>
+    <div class="card">
+      <label>Day (0=Sun … 6=Sat)</label>
+      <input type="number" id="docAvailDay" min="0" max="6" value="1">
+      <label>Start time (e.g. 09:00)</label>
+      <input type="text" id="docAvailStart" placeholder="09:00" value="09:00">
+      <label>End time (e.g. 17:00)</label>
+      <input type="text" id="docAvailEnd" placeholder="17:00" value="17:00">
+      <button type="button" id="docSaveAvailBtn">Save</button>
+      <div id="docAvailMsg" class="error"></div>
+    </div>
+    <div id="docAvailList"></div>
+  </div>
+
+  <div id="panelEarnings" class="panel" style="display:none;">
+    <h2>My earnings</h2>
+    <div class="card">
+      <p><strong>This month:</strong> <span id="earningsMonth"></span></p>
+      <p><strong>Today:</strong> <span id="earningsToday"></span></p>
+    </div>
+    <div id="earningsBills"></div>
+  </div>
+
+  <?!= include('shared-js'); ?>
+  <script>
+    (function() {
+      var token = getSessionToken();
+      if (!token) { window.location.href = window.location.pathname; return; }
+
+      function run(fn) {
+        var args = [token].concat(Array.prototype.slice.call(arguments, 1));
+        return new Promise(function(resolve, reject) {
+          var all = [fn].concat(args);
+          all.push({
+            withSuccessHandler: resolve,
+            withFailureHandler: reject
+          });
+          google.script.run.apply(null, all.slice(0, -1)).withSuccessHandler(resolve).withFailureHandler(reject);
+        });
+      }
+
+      function runCall(fn) {
+        var args = Array.prototype.slice.call(arguments, 1);
+        return new Promise(function(resolve, reject) {
+          var fullArgs = [token].concat(args);
+          var runner = google.script.run;
+          for (var i = 0; i < fullArgs.length; i++) runner = runner[fn] ? runner : runner[fn].apply(runner, fullArgs);
+          (google.script.run[fn] ? function() {
+            var a = [token].concat(args);
+            google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[fn].apply(google.script.run, a);
+          } : function() {
+            var a = [token].concat(args);
+            google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[fn].apply(google.script.run, a);
+          })();
+        });
+      }
+
+      document.getElementById('logoutLink').onclick = function(e) { e.preventDefault(); doLogout(); };
+
+      function showPanel(id) {
+        document.querySelectorAll('.panel').forEach(function(p) { p.style.display = 'none'; });
+        var el = document.getElementById(id);
+        if (el) el.style.display = 'block';
+      }
+
+      document.getElementById('navToday').onclick = function(e) { e.preventDefault(); showPanel('panelToday'); loadToday(); };
+      document.getElementById('navPrescription').onclick = function(e) { e.preventDefault(); showPanel('panelPrescription'); loadPrescAppointments(); };
+      document.getElementById('navBilling').onclick = function(e) { e.preventDefault(); showPanel('panelBilling'); loadBillAppointments(); };
+      document.getElementById('navAvailability').onclick = function(e) { e.preventDefault(); showPanel('panelAvailability'); loadMyAvailability(); };
+      document.getElementById('navEarnings').onclick = function(e) { e.preventDefault(); showPanel('panelEarnings'); loadEarnings(); };
+
+      google.script.run.withSuccessHandler(function(r) {
+        if (r && r.name) document.getElementById('userName').textContent = r.name;
+      }).withFailureHandler(function() {}).getSessionFromToken(token);
+
+      function loadToday() {
+        google.script.run.withSuccessHandler(function(r) {
+          var el = document.getElementById('todayList');
+          if (r.error) { el.innerHTML = '<p class="error">' + r.error + '</p>'; return; }
+          var list = r.appointments || [];
+          el.innerHTML = list.length ? '<table><tr><th>Time</th><th>Patient</th><th>Status</th></tr>' + list.map(function(a) {
+            var t = a.slotStart ? new Date(a.slotStart).toLocaleTimeString() : '';
+            return '<tr><td>' + t + '</td><td>' + (a.patientName || '') + '</td><td>' + (a.status || '') + '</td></tr>';
+          }).join('') + '</table>' : '<p>No appointments today.</p>';
+        }).withFailureHandler(function(err) { document.getElementById('todayList').innerHTML = '<p class="error">' + (err.message || 'Error') + '</p>'; }).getTodayAppointmentsForDoctor(token);
+      }
+
+      function loadPrescAppointments() {
+        google.script.run.withSuccessHandler(function(r) {
+          if (r.error) return;
+          var sel = document.getElementById('prescAppointment');
+          sel.innerHTML = '<option value="">Select appointment</option>';
+          (r.appointments || []).forEach(function(a) {
+            var opt = document.createElement('option');
+            opt.value = a.appointmentId;
+            opt.textContent = (a.slotStart ? new Date(a.slotStart).toLocaleString() : '') + ' – ' + (a.patientName || '');
+            sel.appendChild(opt);
+          });
+        }).withFailureHandler(function() {}).getTodayAppointmentsForDoctor(token);
+      }
+
+      document.getElementById('savePrescBtn').onclick = function() {
+        var apptId = document.getElementById('prescAppointment').value;
+        var content = document.getElementById('prescContent').value;
+        var msg = document.getElementById('prescMsg');
+        msg.textContent = '';
+        if (!apptId || !content.trim()) { msg.textContent = 'Select appointment and enter content.'; return; }
+        google.script.run.withSuccessHandler(function(res) {
+          if (res.error) { msg.textContent = res.error; return; }
+          msg.textContent = 'Prescription saved.';
+          msg.className = 'success';
+          document.getElementById('prescContent').value = '';
+        }).withFailureHandler(function(err) { msg.textContent = err.message || 'Error'; msg.className = 'error'; }).savePrescription(token, apptId, content);
+      };
+
+      function loadBillAppointments() {
+        google.script.run.withSuccessHandler(function(r) {
+          if (r.error) return;
+          var sel = document.getElementById('billAppointment');
+          sel.innerHTML = '<option value="">Select appointment</option>';
+          (r.appointments || []).forEach(function(a) {
+            var opt = document.createElement('option');
+            opt.value = a.appointmentId;
+            opt.textContent = (a.slotStart ? new Date(a.slotStart).toLocaleString() : '') + ' – ' + (a.patientName || '');
+            sel.appendChild(opt);
+          });
+        }).withFailureHandler(function() {}).getTodayAppointmentsForDoctor(token);
+      }
+
+      document.getElementById('createBillBtn').onclick = function() {
+        var apptId = document.getElementById('billAppointment').value;
+        var amount = document.getElementById('billAmount').value;
+        var msg = document.getElementById('billMsg');
+        msg.textContent = '';
+        if (!apptId) { msg.textContent = 'Select appointment.'; return; }
+        google.script.run.withSuccessHandler(function(res) {
+          if (res.error) { msg.textContent = res.error; return; }
+          msg.textContent = 'Bill created.';
+          msg.className = 'success';
+          document.getElementById('billAmount').value = '';
+        }).withFailureHandler(function(err) { msg.textContent = err.message || 'Error'; msg.className = 'error'; }).createBillForAppointment(token, apptId, amount);
+      };
+
+      function loadMyAvailability() {
+        google.script.run.withSuccessHandler(function(session) {
+          if (!session || !session.userId) return;
+          google.script.run.withSuccessHandler(function(r) {
+            var el = document.getElementById('docAvailList');
+            if (r.error) { el.innerHTML = '<p class="error">' + r.error + '</p>'; return; }
+            var list = r.availability || [];
+            var days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+            el.innerHTML = list.length ? '<table><tr><th>Day</th><th>Start</th><th>End</th></tr>' + list.map(function(a) {
+              return '<tr><td>' + (days[a.dayOfWeek] || a.dayOfWeek) + '</td><td>' + (a.startTime || '') + '</td><td>' + (a.endTime || '') + '</td></tr>';
+            }).join('') + '</table>' : '<p>No hours set. Use form above.</p>';
+          }).withFailureHandler(function() {}).getDoctorAvailability(token, session.userId, null);
+        }).withFailureHandler(function() {}).getSessionFromToken(token);
+      }
+
+      document.getElementById('docSaveAvailBtn').onclick = function() {
+        google.script.run.withSuccessHandler(function(session) {
+          if (!session || !session.userId) return;
+          var day = document.getElementById('docAvailDay').value;
+          var start = document.getElementById('docAvailStart').value || '09:00';
+          var end = document.getElementById('docAvailEnd').value || '17:00';
+          var msg = document.getElementById('docAvailMsg');
+          msg.textContent = '';
+          google.script.run.withSuccessHandler(function(res) {
+            if (res.error) { msg.textContent = res.error; return; }
+            msg.textContent = 'Saved.';
+            msg.className = 'success';
+            loadMyAvailability();
+          }).withFailureHandler(function(err) { msg.textContent = err.message || 'Error'; }).saveDoctorAvailability(token, { doctorUserId: session.userId, dayOfWeek: day, startTime: start, endTime: end });
+        }).withFailureHandler(function() {}).getSessionFromToken(token);
+      };
+
+      function loadEarnings() {
+        var now = new Date();
+        var monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+        var monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+        var today = now.toISOString().split('T')[0];
+        google.script.run.withSuccessHandler(function(r) {
+          if (r.error) return;
+          document.getElementById('earningsMonth').textContent = r.earnings || 0;
+        }).withFailureHandler(function() {}).getMyEarnings(token, monthStart, monthEnd);
+        google.script.run.withSuccessHandler(function(r) {
+          if (r.error) return;
+          document.getElementById('earningsToday').textContent = r.earnings || 0;
+        }).withFailureHandler(function() {}).getMyEarnings(token, today, today);
+        google.script.run.withSuccessHandler(function(r) {
+          var el = document.getElementById('earningsBills');
+          if (r.error || !r.bills || !r.bills.length) { el.innerHTML = '<p>No bills.</p>'; return; }
+          el.innerHTML = '<h3>Recent bills</h3><table><tr><th>Date</th><th>Amount</th></tr>' + r.bills.slice(0, 20).map(function(b) {
+            return '<tr><td>' + (b.slotStart ? new Date(b.slotStart).toLocaleDateString() : '') + '</td><td>' + b.amount + '</td></tr>';
+          }).join('') + '</table>';
+        }).withFailureHandler(function() {}).getMyBills(token);
+      }
+
+      loadToday();
+    })();
+  </script>
+</body>
+</html>

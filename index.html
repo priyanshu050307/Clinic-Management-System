@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <?!= include('shared-css'); ?>
+  <? var _url = (typeof appUrl !== 'undefined' && appUrl) ? appUrl : ''; ?>
+  <script>var APP_BASE_URL = '<?!= _url ?>';</script>
+</head>
+<body>
+  <h1>Clinic Management System</h1>
+  <p>Sign in with your email or phone and password.</p>
+  <div class="card">
+    <label for="identifier">Email or Phone</label>
+    <input type="text" id="identifier" placeholder="Email or phone" autocomplete="username">
+    <label for="password">Password</label>
+    <input type="password" id="password" placeholder="Password" autocomplete="current-password">
+    <div id="loginError" class="error"></div>
+    <button type="button" id="loginBtn">Sign in</button>
+  </div>
+  <?!= include('shared-js'); ?>
+  <script>
+    document.getElementById('loginBtn').addEventListener('click', function() {
+      var id = document.getElementById('identifier').value.trim();
+      var pw = document.getElementById('password').value;
+      var errEl = document.getElementById('loginError');
+      errEl.textContent = '';
+      if (!id || !pw) {
+        errEl.textContent = 'Enter email/phone and password.';
+        return;
+      }
+      document.getElementById('loginBtn').disabled = true;
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success && result.sessionToken) {
+            goToDashboard(result.sessionToken);
+          } else {
+            document.getElementById('loginBtn').disabled = false;
+            errEl.textContent = result.error || 'Login failed.';
+          }
+        })
+        .withFailureHandler(function(err) {
+          document.getElementById('loginBtn').disabled = false;
+          errEl.textContent = err.message || 'Server error.';
+        })
+        .login(id, pw);
+    });
+  </script>
+</body>
+</html>
