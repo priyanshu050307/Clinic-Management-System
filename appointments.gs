@@ -360,8 +360,17 @@ function getMyAppointments(sessionToken, fromDate, toDate) {
   var apptIdCol = apptH.indexOf('AppointmentId');
   var nameIdx = userH.indexOf('Name');
   var uidIdx = userH.indexOf('UserId');
-  var from = fromDate ? new Date(fromDate).getTime() : 0;
-  var to = toDate ? new Date(toDate).getTime() : Number.MAX_VALUE;
+  // Use full day range: from = start of fromDate, to = end of toDate (avoids timezone bug where same date gave same midnight for both)
+  var from = 0;
+  if (fromDate) {
+    var dFrom = new Date(fromDate + 'T00:00:00');
+    from = isNaN(dFrom.getTime()) ? 0 : dFrom.getTime();
+  }
+  var to = Number.MAX_VALUE;
+  if (toDate) {
+    var dTo = new Date(toDate + 'T23:59:59.999');
+    to = isNaN(dTo.getTime()) ? Number.MAX_VALUE : dTo.getTime();
+  }
   var list = [];
   for (var i = 1; i < apptData.length; i++) {
     var row = apptData[i];
@@ -371,8 +380,8 @@ function getMyAppointments(sessionToken, fromDate, toDate) {
     if (t < from || t > to) continue;
     var include = false;
     if (session.role === 'Admin') include = true;
-    else if (session.role === 'Doctor' && row[did] === session.userId) include = true;
-    else if (session.role === 'Patient' && row[pid] === session.userId) include = true;
+    else if (session.role === 'Doctor' && String(row[did]) === String(session.userId)) include = true;
+    else if (session.role === 'Patient' && String(row[pid]) === String(session.userId)) include = true;
     if (!include) continue;
     var doctorName = '';
     var patientName = '';
@@ -396,15 +405,70 @@ function getMyAppointments(sessionToken, fromDate, toDate) {
 }
 
 /**
+ * Get today's appointments for a doctor (for Today's appointments tab).
+ * Uses script timezone for "today" and explicit DoctorUserId filtering for reliable display.
+ */
+function getDoctorTodayAppointments(sessionToken) {
+  var session = getSessionFromToken(sessionToken);
+  if (!session || session.role !== 'Doctor') return { error: 'Unauthorized' };
+  var doctorId = String(session.userId);
+  var ss = getSpreadsheet();
+  var apptSh = ss.getSheetByName('Appointments');
+  var userSh = ss.getSheetByName('Users');
+  if (!apptSh || !userSh) return { error: 'Sheets not found' };
+
+  var tz = Session.getScriptTimeZone() || 'Asia/Kolkata';
+  var now = new Date();
+  var todayStr = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
+
+  var apptData = apptSh.getDataRange().getValues();
+  var userData = userSh.getDataRange().getValues();
+  var apptH = apptData[0];
+  var userH = userData[0];
+  var pid = apptH.indexOf('PatientUserId');
+  var did = apptH.indexOf('DoctorUserId');
+  var startId = apptH.indexOf('SlotStart');
+  var statusId = apptH.indexOf('Status');
+  var apptIdCol = apptH.indexOf('AppointmentId');
+  var nameIdx = userH.indexOf('Name');
+  var uidIdx = userH.indexOf('UserId');
+
+  var list = [];
+  for (var i = 1; i < apptData.length; i++) {
+    var row = apptData[i];
+    if (String(row[did]) !== doctorId) continue;
+    if (String(row[statusId] || '').toLowerCase() === 'cancelled') continue;
+    var slotStart = row[startId];
+    if (!slotStart) continue;
+    var slotDateStr = Utilities.formatDate(new Date(slotStart), tz, 'yyyy-MM-dd');
+    if (slotDateStr !== todayStr) continue;
+
+    var patientName = '';
+    for (var u = 1; u < userData.length; u++) {
+      if (String(userData[u][uidIdx]) === String(row[pid])) {
+        patientName = userData[u][nameIdx] || '';
+        break;
+      }
+    }
+    list.push({
+      appointmentId: row[apptIdCol],
+      slotStart: slotStart,
+      slotEnd: row[apptH.indexOf('SlotEnd')],
+      status: row[statusId] || 'Scheduled',
+      patientName: patientName,
+      patientUserId: row[pid],
+      doctorUserId: row[did]
+    });
+  }
+  list.sort(function(a, b) { return new Date(a.slotStart).getTime() - new Date(b.slotStart).getTime(); });
+  return { appointments: list };
+}
+
+/**
  * Get today's appointments for a doctor (for prescription screen).
  */
 function getTodayAppointmentsForDoctor(sessionToken) {
-  var session = getSessionFromToken(sessionToken);
-  if (!session || session.role !== 'Doctor') return { error: 'Unauthorized' };
-  var today = new Date();
-  var start = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
-  var end = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59).toISOString();
-  return getMyAppointments(sessionToken, start, end);
+  return getDoctorTodayAppointments(sessionToken);
 }
 
 /**

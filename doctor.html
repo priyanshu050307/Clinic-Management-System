@@ -129,22 +129,21 @@
       }).withFailureHandler(function() {}).getSessionFromToken(token);
 
       function loadToday() {
-        // Show all appointments for this doctor for today (calendar day)
-        var now = new Date();
-        var from = now.toISOString().split('T')[0]; // today
-        var to = from; // same day
-
         google.script.run.withSuccessHandler(function(r) {
           var el = document.getElementById('todayList');
           if (r.error) { el.innerHTML = '<p class="error">' + r.error + '</p>'; return; }
           var list = r.appointments || [];
           el.innerHTML = list.length ? '<table><tr><th>Time</th><th>Patient</th><th>Status</th></tr>' + list.map(function(a) {
-            var t = a.slotStart ? new Date(a.slotStart).toLocaleTimeString() : '';
-            return '<tr><td>' + t + '</td><td>' + (a.patientName || '') + '</td><td>' + (a.status || '') + '</td></tr>';
+            var slotVal = a.slotStart;
+            var t = '';
+            if (slotVal) {
+              try { t = new Date(slotVal).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); } catch (e) { t = String(slotVal); }
+            }
+            return '<tr><td>' + t + '</td><td>' + (a.patientName || '-') + '</td><td>' + (a.status || 'Scheduled') + '</td></tr>';
           }).join('') + '</table>' : '<p>No appointments today.</p>';
         }).withFailureHandler(function(err) {
           document.getElementById('todayList').innerHTML = '<p class="error">' + (err.message || 'Error') + '</p>';
-        }).getMyAppointments(token, from, to);
+        }).getDoctorTodayAppointments(token);
       }
 
       function loadPrescAppointments() {
@@ -155,7 +154,7 @@
           if (r.error) return;
           var sel = document.getElementById('prescAppointment');
           sel.innerHTML = '<option value="">Select appointment</option>';
-          (r.appointments || []).forEach(function(a) {
+          (r.appointments || []).filter(function(a) { return (a.status || '').toLowerCase() !== 'completed'; }).forEach(function(a) {
             var opt = document.createElement('option');
             opt.value = a.appointmentId;
             opt.textContent = (a.slotStart ? new Date(a.slotStart).toLocaleString() : '') + ' – ' + (a.patientName || '');
@@ -189,7 +188,7 @@
           if (r.error) return;
           var sel = document.getElementById('billAppointment');
           sel.innerHTML = '<option value="">Select appointment</option>';
-          (r.appointments || []).forEach(function(a) {
+          (r.appointments || []).filter(function(a) { return (a.status || '').toLowerCase() !== 'completed'; }).forEach(function(a) {
             var opt = document.createElement('option');
             opt.value = a.appointmentId;
             opt.textContent = (a.slotStart ? new Date(a.slotStart).toLocaleString() : '') + ' – ' + (a.patientName || '');
