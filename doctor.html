@@ -129,6 +129,11 @@
       }).withFailureHandler(function() {}).getSessionFromToken(token);
 
       function loadToday() {
+        // Show all appointments for this doctor for today (calendar day)
+        var now = new Date();
+        var from = now.toISOString().split('T')[0]; // today
+        var to = from; // same day
+
         google.script.run.withSuccessHandler(function(r) {
           var el = document.getElementById('todayList');
           if (r.error) { el.innerHTML = '<p class="error">' + r.error + '</p>'; return; }
@@ -137,10 +142,15 @@
             var t = a.slotStart ? new Date(a.slotStart).toLocaleTimeString() : '';
             return '<tr><td>' + t + '</td><td>' + (a.patientName || '') + '</td><td>' + (a.status || '') + '</td></tr>';
           }).join('') + '</table>' : '<p>No appointments today.</p>';
-        }).withFailureHandler(function(err) { document.getElementById('todayList').innerHTML = '<p class="error">' + (err.message || 'Error') + '</p>'; }).getTodayAppointmentsForDoctor(token);
+        }).withFailureHandler(function(err) {
+          document.getElementById('todayList').innerHTML = '<p class="error">' + (err.message || 'Error') + '</p>';
+        }).getMyAppointments(token, from, to);
       }
 
       function loadPrescAppointments() {
+        // Load a wider window of appointments (past month to next 2 months)
+        var from = new Date(new Date().setMonth(new Date().getMonth() - 1)).toISOString().split('T')[0];
+        var to = new Date(new Date().setMonth(new Date().getMonth() + 2)).toISOString().split('T')[0];
         google.script.run.withSuccessHandler(function(r) {
           if (r.error) return;
           var sel = document.getElementById('prescAppointment');
@@ -151,7 +161,10 @@
             opt.textContent = (a.slotStart ? new Date(a.slotStart).toLocaleString() : '') + ' – ' + (a.patientName || '');
             sel.appendChild(opt);
           });
-        }).withFailureHandler(function() {}).getTodayAppointmentsForDoctor(token);
+        }).withFailureHandler(function() {
+          var sel = document.getElementById('prescAppointment');
+          sel.innerHTML = '<option value=\"\">Error loading appointments</option>';
+        }).getMyAppointments(token, from, to);
       }
 
       document.getElementById('savePrescBtn').onclick = function() {
@@ -169,6 +182,9 @@
       };
 
       function loadBillAppointments() {
+        // Load a wider window of appointments (past month to next 2 months)
+        var from = new Date(new Date().setMonth(new Date().getMonth() - 1)).toISOString().split('T')[0];
+        var to = new Date(new Date().setMonth(new Date().getMonth() + 2)).toISOString().split('T')[0];
         google.script.run.withSuccessHandler(function(r) {
           if (r.error) return;
           var sel = document.getElementById('billAppointment');
@@ -179,7 +195,10 @@
             opt.textContent = (a.slotStart ? new Date(a.slotStart).toLocaleString() : '') + ' – ' + (a.patientName || '');
             sel.appendChild(opt);
           });
-        }).withFailureHandler(function() {}).getTodayAppointmentsForDoctor(token);
+        }).withFailureHandler(function() {
+          var sel = document.getElementById('billAppointment');
+          sel.innerHTML = '<option value=\"\">Error loading appointments</option>';
+        }).getMyAppointments(token, from, to);
       }
 
       document.getElementById('createBillBtn').onclick = function() {

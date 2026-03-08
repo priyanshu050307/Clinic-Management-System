@@ -38,6 +38,10 @@ function savePrescription(sessionToken, appointmentId, content) {
     new Date().toISOString()
   ];
   prescSh.appendRow(row);
+  // If there is also a bill for this appointment, mark it as completed
+  if (typeof maybeCompleteAppointment === 'function') {
+    maybeCompleteAppointment(appointmentId);
+  }
   return { success: true, prescriptionId: prescriptionId };
 }
 

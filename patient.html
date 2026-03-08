@@ -60,7 +60,10 @@
       var token = getSessionToken();
       if (!token) { window.location.href = window.location.pathname; return; }
 
-      document.getElementById('logoutLink').onclick = function(e) { e.preventDefault(); doLogout(); };
+      document.getElementById('logoutLink').onclick = function(e) {
+        e.preventDefault();
+        doLogout();
+      };
 
       function showPanel(id) {
         document.querySelectorAll('.panel').forEach(function(p) { p.style.display = 'none'; });
@@ -68,27 +71,49 @@
         if (el) el.style.display = 'block';
       }
 
-      document.getElementById('navBook').onclick = function(e) { e.preventDefault(); showPanel('panelBook'); loadDoctors(); };
-      document.getElementById('navAppointments').onclick = function(e) { e.preventDefault(); showPanel('panelAppointments'); loadAppointments(); };
-      document.getElementById('navPrescriptions').onclick = function(e) { e.preventDefault(); showPanel('panelPrescriptions'); loadPrescriptions(); };
-      document.getElementById('navBills').onclick = function(e) { e.preventDefault(); showPanel('panelBills'); loadBills(); };
+      document.getElementById('navBook').onclick = function(e) {
+        e.preventDefault();
+        showPanel('panelBook');
+        loadDoctors();
+      };
+      document.getElementById('navAppointments').onclick = function(e) {
+        e.preventDefault();
+        showPanel('panelAppointments');
+        loadAppointments();
+      };
+      document.getElementById('navPrescriptions').onclick = function(e) {
+        e.preventDefault();
+        showPanel('panelPrescriptions');
+        loadPrescriptions();
+      };
+      document.getElementById('navBills').onclick = function(e) {
+        e.preventDefault();
+        showPanel('panelBills');
+        loadBills();
+      };
 
-      google.script.run.withSuccessHandler(function(r) {
-        if (r && r.name) document.getElementById('userName').textContent = r.name;
-      }).withFailureHandler(function() {}).getSessionFromToken(token);
+      google.script.run
+        .withSuccessHandler(function(r) {
+          if (r && r.name) document.getElementById('userName').textContent = r.name;
+        })
+        .withFailureHandler(function() {})
+        .getSessionFromToken(token);
 
       function loadDoctors() {
-        google.script.run.withSuccessHandler(function(r) {
-          if (r.error) return;
-          var sel = document.getElementById('bookDoctor');
-          sel.innerHTML = '<option value="">Select doctor</option>';
-          (r.doctors || []).forEach(function(d) {
-            var o = document.createElement('option');
-            o.value = d.userId;
-            o.textContent = d.name || d.userId;
-            sel.appendChild(o);
-          });
-        }).withFailureHandler(function() {}).getDoctorsList(token);
+        google.script.run
+          .withSuccessHandler(function(r) {
+            if (r.error) return;
+            var sel = document.getElementById('bookDoctor');
+            sel.innerHTML = '<option value="">Select doctor</option>';
+            (r.doctors || []).forEach(function(d) {
+              var o = document.createElement('option');
+              o.value = d.userId;
+              o.textContent = d.name || d.userId;
+              sel.appendChild(o);
+            });
+          })
+          .withFailureHandler(function() {})
+          .getDoctorsList(token);
       }
 
       document.getElementById('loadSlotsBtn').onclick = function() {
@@ -96,91 +121,221 @@
         var date = document.getElementById('bookDate').value;
         var msg = document.getElementById('slotsMsg');
         var listEl = document.getElementById('slotsList');
+
         msg.textContent = '';
+        msg.className = 'error';
         listEl.innerHTML = '';
-        if (!doctorId || !date) { msg.textContent = 'Select doctor and date.'; return; }
-        google.script.run.withSuccessHandler(function(r) {
-          if (r.error) { msg.textContent = r.error; return; }
-          if (r.message) msg.textContent = r.message;
-          var slots = r.slots || [];
-          if (!slots.length) { listEl.innerHTML = '<p>No slots available.</p>'; return; }
-          listEl.innerHTML = '<p>Click a slot to book:</p><table><tr><th>Time</th><th>Book</th></tr>' + slots.map(function(s) {
-            return '<tr><td>' + (s.label || s.start) + '</td><td><button type="button" class="bookSlotBtn" data-start="' + s.start + '">Book</button></td></tr>';
-          }).join('') + '</table>';
-          listEl.querySelectorAll('.bookSlotBtn').forEach(function(btn) {
-            btn.onclick = function() {
-              var start = btn.getAttribute('data-start');
-              google.script.run.withSuccessHandler(function(res) {
-                if (res.error) { msg.textContent = res.error; msg.className = 'error'; return; }
-                msg.textContent = 'Booked.';
-                msg.className = 'success';
-                loadAppointments();
-              }).withFailureHandler(function(err) { msg.textContent = err.message || 'Error'; }).bookAppointment(token, doctorId, start);
+
+        if (!doctorId || !date) {
+          msg.textContent = 'Select doctor and date.';
+          return;
+        }
+
+        google.script.run
+          .withSuccessHandler(function(r) {
+            if (r.error) {
+              msg.textContent = r.error;
+              return;
+            }
+            if (r.message) msg.textContent = r.message;
+
+            var slots = (r && r.slots) ? r.slots : [];
+            if (!slots.length) {
+              listEl.innerHTML = '<p>No slots available for this date.</p>';
+              return;
+            }
+
+            // Create dropdown with all slots
+            var dropdownHtml = '<div class="slots-container">' +
+              '<label>Select time slot:</label>' +
+              '<select id="slotDropdown" class="slot-dropdown">' +
+              '<option value="">Choose a time slot...</option>';
+
+            slots.forEach(function(slot) {
+              // Treat as available unless backend explicitly sets available === false
+              var isAvailable = (slot.available !== false);
+              var cssClass = isAvailable ? 'slot-option-available' : 'slot-option-booked';
+              var statusText = isAvailable ? '' : ' (Booked)';
+              dropdownHtml += '<option value="' + slot.start + '" class="' + cssClass + '" ' +
+                             (!isAvailable ? 'disabled' : '') + '>' +
+                             (slot.label || slot.start) + statusText + '</option>';
+            });
+
+            dropdownHtml += '</select>' +
+              '<button type="button" id="confirmBookBtn" class="book-slot-btn" disabled>Book Appointment</button>' +
+              '</div>';
+
+            listEl.innerHTML = dropdownHtml;
+
+            // Enable/disable book button based on selection
+            var dropdown = document.getElementById('slotDropdown');
+            var bookBtn = document.getElementById('confirmBookBtn');
+
+            dropdown.onchange = function() {
+              var selectedOption = dropdown.options[dropdown.selectedIndex];
+              bookBtn.disabled = !selectedOption.value || selectedOption.disabled;
             };
-          });
-        }).withFailureHandler(function(err) { msg.textContent = err.message || 'Error'; }).getAvailableSlots(token, doctorId, date);
+
+            // Handle booking
+            bookBtn.onclick = function() {
+              var selectedSlot = dropdown.value;
+              if (!selectedSlot) {
+                msg.textContent = 'Please select a time slot.';
+                msg.className = 'error';
+                return;
+              }
+
+              bookBtn.disabled = true;
+              bookBtn.textContent = 'Booking...';
+
+              google.script.run
+                .withSuccessHandler(function(res) {
+                  if (res.error) {
+                    msg.textContent = res.error;
+                    msg.className = 'error';
+                    bookBtn.disabled = false;
+                    bookBtn.textContent = 'Book Appointment';
+                    return;
+                  }
+
+                  msg.textContent = 'Appointment booked successfully!';
+                  msg.className = 'success';
+
+                  // Refresh patient view
+                  loadAppointments();
+
+                  // Clear selection
+                  dropdown.value = '';
+                  bookBtn.disabled = true;
+                  bookBtn.textContent = 'Book Appointment';
+
+                  // Refresh slots to show updated availability
+                  setTimeout(function() {
+                    document.getElementById('loadSlotsBtn').click();
+                  }, 1000);
+                })
+                .withFailureHandler(function(err) {
+                  msg.textContent = (err && err.message) || 'Error booking appointment';
+                  msg.className = 'error';
+                  bookBtn.disabled = false;
+                  bookBtn.textContent = 'Book Appointment';
+                })
+                .bookAppointment(token, doctorId, selectedSlot);
+            };
+          })
+          .withFailureHandler(function(err) {
+            msg.textContent = (err && err.message) || 'Error loading slots';
+          })
+          .getAvailableSlots(token, doctorId, date);
       };
 
-      var tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      document.getElementById('bookDate').value = tomorrow.getFullYear() + '-' + String(tomorrow.getMonth() + 1).padStart(2, '0') + '-' + String(tomorrow.getDate()).padStart(2, '0');
+      // Default booking date = today (so doctor's Today view matches)
+      var today = new Date();
+      document.getElementById('bookDate').value =
+        today.getFullYear() + '-' +
+        String(today.getMonth() + 1).padStart(2, '0') + '-' +
+        String(today.getDate()).padStart(2, '0');
 
       function loadAppointments() {
         var from = new Date(new Date().setMonth(new Date().getMonth() - 1)).toISOString().split('T')[0];
         var to = new Date(new Date().setMonth(new Date().getMonth() + 2)).toISOString().split('T')[0];
-        google.script.run.withSuccessHandler(function(r) {
-          var el = document.getElementById('myAppointments');
-          if (r.error) { el.innerHTML = '<p class="error">' + r.error + '</p>'; return; }
-          var list = r.appointments || [];
-          el.innerHTML = list.length ? '<table><tr><th>Date/Time</th><th>Doctor</th><th>Status</th></tr>' + list.map(function(a) {
-            var t = a.slotStart ? new Date(a.slotStart).toLocaleString() : '';
-            return '<tr><td>' + t + '</td><td>' + (a.doctorName || '') + '</td><td>' + (a.status || '') + '</td></tr>';
-          }).join('') + '</table>' : '<p>No appointments.</p>';
-        }).withFailureHandler(function(err) { document.getElementById('myAppointments').innerHTML = '<p class="error">' + (err.message || 'Error') + '</p>'; }).getMyAppointments(token, from, to);
+        google.script.run
+          .withSuccessHandler(function(r) {
+            var el = document.getElementById('myAppointments');
+            if (r.error) { el.innerHTML = '<p class="error">' + r.error + '</p>'; return; }
+            var list = r.appointments || [];
+            el.innerHTML = list.length ? (
+              '<table><tr><th>Date/Time</th><th>Doctor</th><th>Status</th></tr>' +
+              list.map(function(a) {
+                var t = a.slotStart ? new Date(a.slotStart).toLocaleString() : '';
+                return '<tr><td>' + t + '</td><td>' + (a.doctorName || '') + '</td><td>' + (a.status || '') + '</td></tr>';
+              }).join('') +
+              '</table>'
+            ) : '<p>No appointments.</p>';
+          })
+          .withFailureHandler(function(err) {
+            document.getElementById('myAppointments').innerHTML =
+              '<p class="error">' + ((err && err.message) || 'Error') + '</p>';
+          })
+          .getMyAppointments(token, from, to);
       }
 
       function loadPrescriptions() {
-        google.script.run.withSuccessHandler(function(r) {
-          var el = document.getElementById('myPrescriptions');
-          if (r.error) { el.innerHTML = '<p class="error">' + r.error + '</p>'; return; }
-          var list = r.prescriptions || [];
-          el.innerHTML = list.length ? list.map(function(p) {
-            var d = p.slotStart ? new Date(p.slotStart).toLocaleDateString() : '';
-            return '<div class="card"><p><strong>Date:</strong> ' + d + ' &nbsp; <strong>Doctor:</strong> ' + (p.doctorName || '') + '</p><pre style="white-space:pre-wrap;">' + (p.content || '') + '</pre></div>';
-          }).join('') : '<p>No prescriptions.</p>';
-        }).withFailureHandler(function(err) { document.getElementById('myPrescriptions').innerHTML = '<p class="error">' + (err.message || 'Error') + '</p>'; }).getMyPrescriptions(token);
+        google.script.run
+          .withSuccessHandler(function(r) {
+            var el = document.getElementById('myPrescriptions');
+            if (r.error) { el.innerHTML = '<p class="error">' + r.error + '</p>'; return; }
+            var list = r.prescriptions || [];
+            el.innerHTML = list.length ? list.map(function(p) {
+              var d = p.slotStart ? new Date(p.slotStart).toLocaleDateString() : '';
+              return '<div class="card"><p><strong>Date:</strong> ' + d +
+                ' &nbsp; <strong>Doctor:</strong> ' + (p.doctorName || '') +
+                '</p><pre style="white-space:pre-wrap;">' + (p.content || '') +
+                '</pre></div>';
+            }).join('') : '<p>No prescriptions.</p>';
+          })
+          .withFailureHandler(function(err) {
+            document.getElementById('myPrescriptions').innerHTML =
+              '<p class="error">' + ((err && err.message) || 'Error') + '</p>';
+          })
+          .getMyPrescriptions(token);
       }
 
       function loadBills() {
-        google.script.run.withSuccessHandler(function(r) {
-          var el = document.getElementById('myBills');
-          if (r.error) { el.innerHTML = '<p class="error">' + r.error + '</p>'; return; }
-          var list = r.bills || [];
-          el.innerHTML = list.length ? '<table><tr><th>Date</th><th>Doctor</th><th>Amount</th><th>Action</th></tr>' + list.map(function(b) {
-            var d = b.slotStart ? new Date(b.slotStart).toLocaleDateString() : '';
-            return '<tr><td>' + d + '</td><td>' + (b.doctorName || '') + '</td><td>' + b.amount + '</td><td><button type="button" class="viewInvoiceBtn" data-apptid="' + b.appointmentId + '">View / Print</button></td></tr>';
-          }).join('') + '</table>' : '<p>No bills.</p>';
-          el.querySelectorAll('.viewInvoiceBtn').forEach(function(btn) {
-            btn.onclick = function() {
-              var apptId = btn.getAttribute('data-apptid');
-              google.script.run.withSuccessHandler(function(bill) {
-                if (bill.error) return;
-                var area = document.getElementById('invoiceArea');
-                var content = document.getElementById('invoiceContent');
-                content.innerHTML = '<p><strong>Clinic Management System</strong></p><p>Patient: ' + (bill.patientName || '') + '</p><p>Doctor: ' + (bill.doctorName || '') + '</p><p>Date: ' + (bill.slotStart || '') + '</p><p>Amount: ' + bill.amount + '</p><p>Bill ID: ' + (bill.billId || '') + '</p>';
-                area.style.display = 'block';
-              }).withFailureHandler(function() {}).getBillForAppointment(token, apptId);
-            };
-          });
-        }).withFailureHandler(function(err) { document.getElementById('myBills').innerHTML = '<p class="error">' + (err.message || 'Error') + '</p>'; }).getMyBills(token);
+        google.script.run
+          .withSuccessHandler(function(r) {
+            var el = document.getElementById('myBills');
+            if (r.error) { el.innerHTML = '<p class="error">' + r.error + '</p>'; return; }
+            var list = r.bills || [];
+            el.innerHTML = list.length ? (
+              '<table><tr><th>Date</th><th>Doctor</th><th>Amount</th><th>Action</th></tr>' +
+              list.map(function(b) {
+                var d = b.slotStart ? new Date(b.slotStart).toLocaleDateString() : '';
+                return '<tr><td>' + d + '</td><td>' + (b.doctorName || '') +
+                  '</td><td>' + b.amount +
+                  '</td><td><button type="button" class="viewInvoiceBtn" data-apptid="' +
+                  b.appointmentId + '">View / Print</button></td></tr>';
+              }).join('') +
+              '</table>'
+            ) : '<p>No bills.</p>';
+
+            el.querySelectorAll('.viewInvoiceBtn').forEach(function(btn) {
+              btn.onclick = function() {
+                var apptId = btn.getAttribute('data-apptid');
+                google.script.run
+                  .withSuccessHandler(function(bill) {
+                    if (bill.error) return;
+                    var area = document.getElementById('invoiceArea');
+                    var content = document.getElementById('invoiceContent');
+                    content.innerHTML =
+                      '<p><strong>Clinic Management System</strong></p>' +
+                      '<p>Patient: ' + (bill.patientName || '') + '</p>' +
+                      '<p>Doctor: ' + (bill.doctorName || '') + '</p>' +
+                      '<p>Date: ' + (bill.slotStart || '') + '</p>' +
+                      '<p>Amount: ' + bill.amount + '</p>' +
+                      '<p>Bill ID: ' + (bill.billId || '') + '</p>';
+                    area.style.display = 'block';
+                  })
+                  .withFailureHandler(function() {})
+                  .getBillForAppointment(token, apptId);
+              };
+            });
+          })
+          .withFailureHandler(function(err) {
+            document.getElementById('myBills').innerHTML =
+              '<p class="error">' + ((err && err.message) || 'Error') + '</p>';
+          })
+          .getMyBills(token);
       }
 
       document.getElementById('printInvoiceBtn').onclick = function() {
         window.print();
       };
 
+      // Initial load
       loadDoctors();
     })();
   </script>
 </body>
 </html>
+

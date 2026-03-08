@@ -143,38 +143,142 @@ function formatTime(d) {
 /**
  * Get available slots for a doctor on a date (excluding already booked).
  */
-function getAvailableSlots(sessionToken, doctorUserId, dateStr) {
-  var session = getSessionFromToken(sessionToken);
-  if (!session) return { error: 'Unauthorized' };
-  var date = new Date(dateStr);
-  if (isNaN(date.getTime())) return { error: 'Invalid date' };
-  var dayOfWeek = date.getDay();
-  var avail = getDoctorAvailability(sessionToken, doctorUserId, dayOfWeek);
-  if (avail.error) return avail;
-  if (!avail.availability || avail.availability.length === 0) {
-    return { slots: [], message: 'No visiting hours for this day.' };
-  }
-  var dateOnly = (dateStr.split('T')[0] || dateStr).substring(0, 10);
-  var allSlots = [];
-  for (var a = 0; a < avail.availability.length; a++) {
-    var range = getSlotsForRange(
-      dateOnly,
-      avail.availability[a].startTime,
-      avail.availability[a].endTime
-    );
-    for (var r = 0; r < range.length; r++) allSlots.push(range[r]);
-  }
-  var booked = getBookedSlotsForDoctorOnDate(doctorUserId, dateOnly);
-  var available = [];
-  for (var i = 0; i < allSlots.length; i++) {
-    var slot = allSlots[i];
-    var taken = false;
-    for (var b = 0; b < booked.length; b++) {
-      if (booked[b].start === slot.start) { taken = true; break; }
+function getAvailableSlots(token, doctorUserId, date) {
+  try {
+    // 1️⃣ Validate session
+    var session = getSessionFromToken(token);
+    if (!session) {
+      return { error: 'Invalid session.' };
     }
-    if (!taken) available.push(slot);
+
+    if (!doctorUserId || !date) {
+      return { error: 'Doctor and date are required.' };
+    }
+
+    // 2️⃣ SAFE date parsing (NO timezone bug)
+    var d = date.split('-'); // YYYY-MM-DD
+    var selectedDate = new Date(
+      Number(d[0]),
+      Number(d[1]) - 1,
+      Number(d[2])
+    );
+    var dayOfWeek = selectedDate.getDay(); // 0 = Sun ... 6 = Sat
+
+    // 3️⃣ Fetch doctor availability (use same spreadsheet helper everywhere)
+    var ss = getSpreadsheet();
+    var sheet = ss.getSheetByName('DoctorAvailability');
+    if (!sheet) {
+      return { error: 'DoctorAvailability sheet not found.' };
+    }
+
+    var data = sheet.getDataRange().getValues();
+    var headers = data.shift();
+
+    var idxDoctor = headers.indexOf('DoctorUserId');
+    var idxDay = headers.indexOf('DayOfWeek');
+    var idxStart = headers.indexOf('StartTime');
+    var idxEnd = headers.indexOf('EndTime');
+
+    var availability = data.filter(function(r) {
+      return r[idxDoctor] === doctorUserId && Number(r[idxDay]) === dayOfWeek;
+    });
+
+    if (!availability.length) {
+      return { message: 'Doctor not available on this day.', slots: [] };
+    }
+
+    // 4️⃣ Fetch already booked appointments
+    var apptSheet = ss.getSheetByName('Appointments');
+    var booked = {};
+
+    if (apptSheet) {
+      var apptData = apptSheet.getDataRange().getValues();
+      var apptHeaders = apptData.shift();
+
+      var aDoctor = apptHeaders.indexOf('DoctorUserId');
+      var aSlot = apptHeaders.indexOf('SlotStart');
+      var aStatus = apptHeaders.indexOf('Status');
+
+      apptData.forEach(function(r) {
+        var status = (r[aStatus] || '').toString().toLowerCase();
+        var isActive = status && status !== 'cancelled';  // only non-cancelled are blocking
+
+        if (r[aDoctor] === doctorUserId && r[aSlot] && isActive) {
+        var key = normalizeSlot(new Date(r[aSlot]));
+        booked[key] = true;
+        }
+      });
+    }
+
+    // 5️⃣ Slot builder (15-minute slots)
+    function buildDateTime(dateStr, timeVal) {
+      var dd = dateStr.split('-');
+
+      var hours = 0;
+      var minutes = 0;
+
+      if (timeVal instanceof Date) {
+        // Time stored as a Date object in the sheet
+        hours = timeVal.getHours();
+        minutes = timeVal.getMinutes();
+      } else {
+        // Fallback: assume string like "HH:mm"
+        var s = (timeVal != null ? String(timeVal) : '').trim();
+        var tt = s.split(':');
+        hours = Number(tt[0]) || 0;
+        minutes = Number(tt[1]) || 0;
+      }
+
+      return new Date(
+        Number(dd[0]),
+        Number(dd[1]) - 1,
+        Number(dd[2]),
+        hours,
+        minutes,
+        0,
+        0
+      );
+    }
+
+    function normalizeSlot(dt) {
+      return dt.getFullYear() + '-' +
+        String(dt.getMonth() + 1).padStart(2, '0') + '-' +
+        String(dt.getDate()).padStart(2, '0') + ' ' +
+        String(dt.getHours()).padStart(2, '0') + ':' +
+        String(dt.getMinutes()).padStart(2, '0');
+    }
+
+    var slots = [];
+
+    // 6️⃣ Generate slots
+    availability.forEach(function(a) {
+      var start = buildDateTime(date, a[idxStart]);
+      var end = buildDateTime(date, a[idxEnd]);
+
+      while (start < end) {
+        var key = normalizeSlot(start);
+
+        if (!booked[key]) {
+          slots.push({
+            start: start.toISOString(),
+            label: Utilities.formatDate(
+              start,
+              Session.getScriptTimeZone(),
+              'HH:mm'
+            ),
+            available: true // explicitly mark as available for frontend
+          });
+        }
+
+        start = new Date(start.getTime() + 15 * 60 * 1000); // +15 min
+      }
+    });
+
+    return { slots: slots };
+
+  } catch (e) {
+    return { error: e.message };
   }
-  return { slots: available };
 }
 
 function getBookedSlotsForDoctorOnDate(doctorUserId, dateOnly) {
@@ -301,6 +405,63 @@ function getTodayAppointmentsForDoctor(sessionToken) {
   var start = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
   var end = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59).toISOString();
   return getMyAppointments(sessionToken, start, end);
+}
+
+/**
+ * If an appointment has both a prescription and a bill, mark it as Completed.
+ */
+function maybeCompleteAppointment(appointmentId) {
+  if (!appointmentId) return;
+  var ss = getSpreadsheet();
+  var apptSh = ss.getSheetByName('Appointments');
+  var prescSh = ss.getSheetByName('Prescriptions');
+  var billSh = ss.getSheetByName('Billing');
+  if (!apptSh || !prescSh || !billSh) return;
+
+  var apptData = apptSh.getDataRange().getValues();
+  var apptH = apptData[0];
+  var apptIdIdx = apptH.indexOf('AppointmentId');
+  var statusIdx = apptH.indexOf('Status');
+  if (apptIdIdx === -1 || statusIdx === -1) return;
+
+  var apptRow = -1;
+  for (var i = 1; i < apptData.length; i++) {
+    if (apptData[i][apptIdIdx] === appointmentId) {
+      apptRow = i;
+      break;
+    }
+  }
+  if (apptRow === -1) return;
+
+  var prescData = prescSh.getDataRange().getValues();
+  var prescH = prescData[0];
+  var prescApptIdx = prescH.indexOf('AppointmentId');
+  var hasPresc = false;
+  if (prescApptIdx !== -1) {
+    for (var p = 1; p < prescData.length; p++) {
+      if (prescData[p][prescApptIdx] === appointmentId) {
+        hasPresc = true;
+        break;
+      }
+    }
+  }
+
+  var billData = billSh.getDataRange().getValues();
+  var billH = billData[0];
+  var billApptIdx = billH.indexOf('AppointmentId');
+  var hasBill = false;
+  if (billApptIdx !== -1) {
+    for (var b = 1; b < billData.length; b++) {
+      if (billData[b][billApptIdx] === appointmentId) {
+        hasBill = true;
+        break;
+      }
+    }
+  }
+
+  if (hasPresc && hasBill) {
+    apptSh.getRange(apptRow + 1, statusIdx + 1).setValue('Completed');
+  }
 }
 
 /**

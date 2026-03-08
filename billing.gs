@@ -47,6 +47,10 @@ function createBillForAppointment(sessionToken, appointmentId, amount) {
     new Date().toISOString()
   ];
   billSh.appendRow(row);
+  // If there is also a prescription for this appointment, mark it as completed
+  if (typeof maybeCompleteAppointment === 'function') {
+    maybeCompleteAppointment(appointmentId);
+  }
   return { success: true, billId: billId, amount: amt };
 }
 
